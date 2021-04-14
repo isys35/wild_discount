@@ -1,0 +1,11 @@
+<b>{{ brand }} / {{ name }}</b>
+{% if aviable>0 %}
+<b>В наличиии:</b> {{ aviable }}
+<b>Цена:</b> {{ price }} <s>{{ old_price }}</s>
+<b>Скидка</b> -{{ discount }}%
+{% else %}
+<b>Закончился</b>
+{% endif %}
+{{ description }}
+
+<a href="{{ url }}">Ссылка</a>
