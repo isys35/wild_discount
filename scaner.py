@@ -6,8 +6,6 @@ import time
 import httplib2
 import os
 
-from peewee import IntegrityError
-
 from db import Category, Product, TelegramMessage, Photo
 import config
 import bot
@@ -27,6 +25,8 @@ URL_CATEGORIES = 'https://www.wildberries.ru/menu/getrendered?lang=ru&burger=tru
 
 HOST = 'https://www.wildberries.ru'
 IMG_DIRECTORY = 'images'
+DELAY = 3
+
 if not os.path.exists(IMG_DIRECTORY): os.makedirs(IMG_DIRECTORY)
 
 
@@ -37,7 +37,9 @@ def save_page(response: str, file_name='page.html'):
 
 def parse_products_urls(response: str, category: Category):
     soup = BeautifulSoup(response, 'lxml')
-    products_blocks = soup.select('.dtList.i-dtList.j-card-item.no-left-part')
+    products_blocks = soup.select('.dtList.i-dtList.j-card-item ')
+    # save_page(response)
+    # sys.exit()
     for product_block in products_blocks:
         url = HOST + product_block.select_one('.ref_goods_n_p.j-open-full-product-card')['href']
         sale_block = product_block.select_one('span.price-sale.active')
@@ -151,6 +153,7 @@ def parse_product_data(response: str):
 
 
 def update_products_in_db():
+    print('[INFO] Обновление продуктов в бд')
     for product in Product.select().where(Product.closed == False):
         response_product = requests.get(product.url)
         product_data = parse_product_data(response_product.text)
@@ -165,11 +168,13 @@ def update_products_in_db():
             tg_message.text = text_message
             product.save()
             tg_message.save()
-            time.sleep(1)
+            time.sleep(DELAY)
 
 
 def update_new_products():
+    print('[INFO] Поиск новых продуктов')
     for category in Category.select():
+        print('[INFO] Категория: {}'.format(category.url))
         products_urls = get_products_url_from_category(category)
         for product_url in products_urls:
             product_in_db = Product.select().where(Product.url == product_url)
@@ -191,7 +196,7 @@ def update_new_products():
                 product = Product.create(**product_data)
                 TelegramMessage.create(product=product, tg_id=message_id, text=text_message)
                 Photo.create(product=product, url=photo_url, path=photo_path)
-                time.sleep(1)
+                time.sleep(DELAY)
 
 
 def update_products():
