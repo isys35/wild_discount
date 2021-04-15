@@ -26,7 +26,13 @@ class Product(BaseModel):
     old_price = FloatField()
     description = TextField()
     aviable = IntegerField()
-    photo = CharField()
+    closed = BooleanField(default=False)
+
+
+class Photo(BaseModel):
+    product = ForeignKeyField(Product, backref='photos')
+    url = CharField(unique=True)
+    path = CharField(unique=True)
 
 
 class TelegramMessage(BaseModel):
@@ -40,12 +46,11 @@ def init():
     Category.create_table()
     Product.create_table()
     TelegramMessage.create_table()
-    # SubCategory.create_table()
-    # SubSubCategory.create_table()
+    Photo.create_table()
 
 
 if not os.path.isfile(DB_PATH):
     init()
 
 if __name__ == '__main__':
-    Product.create_table()
+    init()

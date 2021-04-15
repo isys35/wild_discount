@@ -3,10 +3,12 @@ from bs4 import BeautifulSoup
 import re
 import json
 import time
+import httplib2
+import os
 
 from peewee import IntegrityError
 
-from db import Category, Product, TelegramMessage
+from db import Category, Product, TelegramMessage, Photo
 import config
 import bot
 
@@ -24,6 +26,8 @@ MAIN_HEADERS = {
 URL_CATEGORIES = 'https://www.wildberries.ru/menu/getrendered?lang=ru&burger=true'
 
 HOST = 'https://www.wildberries.ru'
+IMG_DIRECTORY = 'images'
+if not os.path.exists(IMG_DIRECTORY): os.makedirs(IMG_DIRECTORY)
 
 
 def save_page(response: str, file_name='page.html'):
@@ -124,8 +128,20 @@ def _parse_brand(response: str):
         return brand.text
 
 
+def save_image(url, path):
+    h = httplib2.Http('.cache')
+    response, content = h.request(url)
+    with open(path, 'wb') as img_file:
+        img_file.write(content)
+
+
 def _parse_aviable(response: str):
     return sum([int(el) for el in re.findall(r'"quantity":(\d+),', response)])
+
+
+def _parse_photo_url(response: str):
+    soup = BeautifulSoup(response, 'lxml')
+    return 'https:' + soup.select_one('img.preview-photo.j-zoom-preview')['src']
 
 
 def parse_product_data(response: str):
@@ -139,58 +155,67 @@ def parse_product_data(response: str):
         name = _parse_name(response)
         brand = _parse_brand(response)
         aviable = _parse_aviable(response)
-        return {'discount': discount,
+        data = {'discount': discount,
                 'price': price,
                 'description': description,
                 'name': name,
                 'brand': brand,
                 'aviable': aviable,
                 'old_price': old_price}
+        print(data)
+        return data
     else:
         save_page(response)
 
 
-def update_products():
+def update_products_in_db():
+    for product in Product.select().where(Product.closed == False):
+        response_product = requests.get(product.url)
+        product_data = parse_product_data(response_product.text)
+        if product_data['aviable'] != product.aviable:
+            product.aviable = product_data['aviable']
+            if product_data['aviable'] == 0:
+                product.closed = True
+            template = config.JINJA_ENV.get_template('template.html')
+            text_message = template.render(product_data)
+            tg_message = TelegramMessage.select().where(TelegramMessage.product == product).get()
+            bot.change_post(tg_message.tg_id, text_message)
+            tg_message.text = text_message
+            product.save()
+            tg_message.save()
+            time.sleep(1)
+
+
+def update_new_products():
     for category in Category.select():
         products_urls = get_products_url_from_category(category)
         for product_url in products_urls:
             product_in_db = Product.select().where(Product.url == product_url)
             response_product = requests.get(product_url)
             product_data = parse_product_data(response_product.text)
-            product_data['url'] = product_url
-            product_data['category'] = category
             if not product_in_db:
                 template = config.JINJA_ENV.get_template('template.html')
+                product_data['url'] = product_url
                 text_message = template.render(product_data)
-                message_id = bot.send_message(text_message)
+
+                photo_url = _parse_photo_url(response_product.text)
+                photo_path = os.path.join(IMG_DIRECTORY, photo_url.split('/')[-1])
+                save_image(photo_url, photo_path)
+
+                with open(photo_path, 'rb') as image:
+                    message_id = bot.send_post(image, text_message)
+
+                product_data['category'] = category
                 product = Product.create(**product_data)
                 TelegramMessage.create(product=product, tg_id=message_id, text=text_message)
+                Photo.create(product=product, url=photo_url, path=photo_path)
                 time.sleep(1)
 
 
-def test():
-    with open('page.html', 'r', encoding='utf-8') as html_file:
-        response_product = html_file.read()
-    product_data = parse_product_data(response_product)
-    template = config.JINJA_ENV.get_template('template.html')
-    context = {'brand': product_data.get('brand'),
-               'name': product_data.get('name'),
-               'description': product_data.get('description'),
-               'aviable': product_data.get('aviable')}
-    message = bot.send_message('123123')
-    print(message)
-    time.sleep(3)
-    bot.change_message(message, 'Ууупс')
+def update_products():
+    update_products_in_db()
+    update_new_products()
 
 
 if __name__ == '__main__':
-    # update_products()
-    # while True:
-    #     try:
-    #         test()
-    #         break
-    #     except Exception as ex:
-    #         print(ex)
-    #         continue
-    response = requests.get('https://by.wildberries.ru/catalog/14565809/detail.aspx')
-    save_page(response.text, 'page2.html')
+    update_products()

@@ -7,7 +7,7 @@ bot = telebot.TeleBot(config.BOT_TOKEN)
 
 
 def send_message(message):
-    message = bot.send_message(chat_id=config.CHAT_NAME, text=message, parse_mode='HTML')
+    message = bot.send_message(chat_id=config.CHAT_NAME, text=message, parse_mode='HTML', disable_web_page_preview=True)
     return message.id
 
 
@@ -17,8 +17,16 @@ def change_message(message_id, new_message):
     return message.id
 
 
+def send_post(img, message):
+    post = bot.send_photo(chat_id=config.CHAT_NAME, photo=img, caption=message, parse_mode='HTML')
+    return post.id
+
+
+def change_post(message_id, new_message):
+    post = bot.edit_message_caption(chat_id=config.CHAT_NAME, message_id=message_id, caption=new_message,
+                                    parse_mode='HTML')
+    return post.id
+
+
 if __name__ == '__main__':
     pass
-    # env = Environment(loader=PackageLoader(directory_name, 'templates'), autoescape=select_autoescape(['html', 'xml']))
-    # template = env.get_template('template.html')
-    # print(template.render({'brand':'dasdsadas', 'name':'fsafdsdfs'}))
