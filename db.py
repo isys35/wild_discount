@@ -49,8 +49,26 @@ def init():
     Photo.create_table()
 
 
+def hand_update_categories():
+    while True:
+        url = input('Введите ссылку на категорию: ')
+        discount = input('Введите скидку(80 по умолчанию):')
+        if not discount:
+            try:
+                Category.create(url=url)
+                print('[INFO] Категория сохранена')
+            except IntegrityError:
+                continue
+        else:
+            try:
+                Category.create(url=url, discount=int(discount))
+                print('[INFO] Категория сохранена')
+            except IntegrityError:
+                continue
+
+
 if not os.path.isfile(DB_PATH):
     init()
 
 if __name__ == '__main__':
-    init()
+    hand_update_categories()

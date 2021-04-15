@@ -35,24 +35,6 @@ def save_page(response: str, file_name='page.html'):
         html_file.write(response)
 
 
-def hand_update_categories():
-    while True:
-        url = input('Введите ссылку на категорию: ')
-        discount = input('Введите скидку(80 по умолчанию):')
-        if not discount:
-            try:
-                Category.create(url=url)
-                print('[INFO] Категория сохранена')
-            except IntegrityError:
-                continue
-        else:
-            try:
-                Category.create(url=url, discount=int(discount))
-                print('[INFO] Категория сохранена')
-            except IntegrityError:
-                continue
-
-
 def parse_products_urls(response: str, category: Category):
     soup = BeautifulSoup(response, 'lxml')
     products_blocks = soup.select('.dtList.i-dtList.j-card-item.no-left-part')
