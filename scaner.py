@@ -5,6 +5,7 @@ import json
 import time
 import httplib2
 import os
+from jinja2 import Template
 
 from db import Category, Product, TelegramMessage, Photo
 import config
@@ -26,6 +27,10 @@ URL_CATEGORIES = 'https://www.wildberries.ru/menu/getrendered?lang=ru&burger=tru
 HOST = 'https://www.wildberries.ru'
 IMG_DIRECTORY = 'images'
 DELAY = 3
+EXCEPTION_MARKET_FILE = 'exceptions_markets.txt'
+
+with open(EXCEPTION_MARKET_FILE, 'r') as exc_market_file:
+    EXCEPTION_MARKETS = exc_market_file.read().split('\n')
 
 if not os.path.exists(IMG_DIRECTORY): os.makedirs(IMG_DIRECTORY)
 
@@ -148,8 +153,6 @@ def parse_product_data(response: str):
                 'old_price': old_price}
         print(data)
         return data
-    else:
-        save_page(response)
 
 
 def update_products_in_db():
@@ -161,7 +164,11 @@ def update_products_in_db():
             product.aviable = product_data['aviable']
             if product_data['aviable'] == 0:
                 product.closed = True
-            template = config.JINJA_ENV.get_template('template.html')
+            with open(os.path.join(config.TEMPLATES_DIRECTORY, 'template.html'), 'r',
+                      encoding='utf-8') as template_file:
+                template_text = template_file.read()
+            template = Template(template_text)
+            product_data['url'] = product.url
             text_message = template.render(product_data)
             tg_message = TelegramMessage.select().where(TelegramMessage.product == product).get()
             bot.change_post(tg_message.tg_id, text_message)
@@ -180,18 +187,21 @@ def update_new_products():
             product_in_db = Product.select().where(Product.url == product_url)
             response_product = requests.get(product_url)
             product_data = parse_product_data(response_product.text)
+            if product_data['brand'] in EXCEPTION_MARKETS:
+                continue
             if not product_in_db:
-                template = config.JINJA_ENV.get_template('template.html')
+                with open(os.path.join(config.TEMPLATES_DIRECTORY, 'template.html'), 'r', encoding='utf-8') as template_file:
+                    template_text = template_file.read()
+                template = Template(template_text)
                 product_data['url'] = product_url
                 text_message = template.render(product_data)
-
                 photo_url = _parse_photo_url(response_product.text)
                 photo_path = os.path.join(IMG_DIRECTORY, photo_url.split('/')[-1])
                 save_image(photo_url, photo_path)
 
                 with open(photo_path, 'rb') as image:
                     message_id = bot.send_post(image, text_message)
-
+                os.remove(photo_path)
                 product_data['category'] = category
                 product = Product.create(**product_data)
                 TelegramMessage.create(product=product, tg_id=message_id, text=text_message)

@@ -1,10 +1,5 @@
 import traceback
-try:
-    import scaner
-except Exception as ex:
-    print('[ERROR]')
-    print(traceback.format_exc())
-    input('Press enter...')
+import scaner
 
 if __name__ == '__main__':
     while True:
@@ -12,5 +7,5 @@ if __name__ == '__main__':
             scaner.update_products()
         except Exception as ex:
             print('[ERROR]')
-            print(ex)
+            print(traceback.format_exc())
             input('Press enter...')
