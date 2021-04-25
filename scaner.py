@@ -6,12 +6,10 @@ import time
 import httplib2
 import os
 from jinja2 import Template
-import random
 
 from telebot.apihelper import ApiTelegramException
 
-from db import Category, Product, TelegramMessage, DBManager
-import config
+from db import Category, DBManager
 import bot
 
 MAIN_HEADERS = {
