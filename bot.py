@@ -1,5 +1,6 @@
 import telebot
 import config
+from scaner import ImageParser
 
 bot = telebot.TeleBot(config.BOT_TOKEN)
 
@@ -15,8 +16,12 @@ def change_message(message_id, new_message):
     return message.id
 
 
-def send_post(img, message):
-    post = bot.send_photo(chat_id=config.CHAT_NAME, photo=img, caption=message, parse_mode='HTML')
+def send_post(img_url, message):
+    image_parser = ImageParser(img_url)
+    image_parser.save()
+    with open(image_parser.path, 'rb') as img:
+        post = bot.send_photo(chat_id=config.CHAT_NAME, photo=img, caption=message, parse_mode='HTML')
+    image_parser.delete()
     return post.id
 
 

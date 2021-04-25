@@ -6,8 +6,11 @@ import time
 import httplib2
 import os
 from jinja2 import Template
+import random
 
-from db import Category, Product, TelegramMessage, Photo
+from telebot.apihelper import ApiTelegramException
+
+from db import Category, Product, TelegramMessage, DBManager
 import config
 import bot
 
@@ -25,14 +28,7 @@ MAIN_HEADERS = {
 URL_CATEGORIES = 'https://www.wildberries.ru/menu/getrendered?lang=ru&burger=true'
 
 HOST = 'https://www.wildberries.ru'
-IMG_DIRECTORY = 'images'
 DELAY = 3
-EXCEPTION_MARKET_FILE = 'exceptions_markets.txt'
-
-with open(EXCEPTION_MARKET_FILE, 'r') as exc_market_file:
-    EXCEPTION_MARKETS = exc_market_file.read().split('\n')
-
-if not os.path.exists(IMG_DIRECTORY): os.makedirs(IMG_DIRECTORY)
 
 
 def save_page(response: str, file_name='page.html'):
@@ -40,173 +36,221 @@ def save_page(response: str, file_name='page.html'):
         html_file.write(response)
 
 
-def parse_products_urls(response: str, category: Category):
-    soup = BeautifulSoup(response, 'lxml')
-    products_blocks = soup.select('.dtList.i-dtList.j-card-item ')
-    # save_page(response)
-    # sys.exit()
-    for product_block in products_blocks:
+class TemplateMessage:
+    TEMPLATE_FILE = 'template.html'
+    TEMPLATE_DIR = 'templates'
+
+    def __init__(self, data):
+        self.data = data
+
+    def get_text(self):
+        template_path = os.path.join(self.TEMPLATE_DIR, self.TEMPLATE_FILE)
+        with open(template_path, 'r', encoding='utf-8') as template_file:
+            template_text = template_file.read()
+        template = Template(template_text)
+        text_message = template.render(self.data)
+        return text_message
+
+
+class ParserProduct:
+    def __init__(self, response_text: str):
+        self.response_text = response_text
+
+    def _get_description(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        description = soup.select_one('.description-text')
+        if description:
+            return description.select_one('p').text
+
+    def _get_name(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        name = soup.select_one('span.name')
+        if name:
+            return name.text
+
+    def _get_brand(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        brand = soup.select_one('span.brand')
+        if brand:
+            return brand.text
+
+    def _get_aviable(self):
+        return sum([int(el) for el in re.findall(r'"quantity":(\d+),', self.response_text)])
+
+    def get_photo_url(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        return 'https:' + soup.select_one('img.preview-photo.j-zoom-preview')['src']
+
+    def get_data(self):
+        re_search = re.search(r'\"priceForProduct\":(\{.+?\})', self.response_text)
+        if re_search:
+            json_price = json.loads(re_search.group(1))
+            discount = json_price.get('sale')
+            price = json_price.get('priceWithSale')
+            old_price = json_price.get('price')
+            name = self._get_name()
+            brand = self._get_brand()
+            aviable = self._get_aviable()
+            data = {'discount': discount,
+                    'price': price,
+                    'name': name,
+                    'brand': brand,
+                    'aviable': aviable,
+                    'old_price': old_price}
+            print(data)
+            return data
+
+
+class ParserCategory:
+    EXCEPTION_MARKET_FILE = 'exceptions_markets.txt'
+    with open(EXCEPTION_MARKET_FILE, 'r') as exc_market_file:
+        EXCEPTION_MARKETS = exc_market_file.read().split('\n')
+
+    def __init__(self, response_text: str, category: Category):
+        self.response_text = response_text
+        self.category = category
+
+    @staticmethod
+    def _get_url(product_block):
         url = HOST + product_block.select_one('.ref_goods_n_p.j-open-full-product-card')['href']
-        sale_block = product_block.select_one('span.price-sale.active')
-        if sale_block:
-            product_discount = int(sale_block.text.replace('-', '').replace('%', ''))
-            if product_discount >= category.discount:
-                yield url
+        return url
 
-
-def parse_next_page(response: str, category: Category):
-    soup = BeautifulSoup(response, 'lxml')
-    products_blocks = soup.select('.dtList.i-dtList.j-card-item.no-left-part')
-    for product_block in products_blocks:
+    def _check_product(self, product_block):
+        url = self._get_url(product_block)
+        product_from_db = DBManager().product.get_by_url(url)
+        if product_from_db:
+            return
         sale_block = product_block.select_one('span.price-sale.active')
         if not sale_block:
             return
+        brand = product_block.select_one('.brand-name.c-text-sm').text.replace('/', '').strip()
+        if brand in self.EXCEPTION_MARKETS:
+            return
+        product_discount = int(sale_block.text.replace('-', '').replace('%', ''))
+        if not self.category.price_border and not self.category.price_border_with_discount:
+            if product_discount >= self.category.discount:
+                return True
         else:
-            product_discount = int(sale_block.text.replace('-', '').replace('%', ''))
-            if product_discount < category.discount:
+            product_old_price = int(
+                ''.join(re.findall(r'\d', product_block.select_one('span.price-old-block').select_one('del').text)))
+            product_new_price = int(''.join(re.findall(r'\d', product_block.select_one('ins.lower-price').text)))
+            filter_price = product_discount >= self.category.discount and \
+                           product_old_price < self.category.price_border and \
+                           product_new_price < self.category.price_border_with_discount
+            if filter_price:
+                return True
+
+    def get_urls_products(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        products_blocks = soup.select('.dtList.i-dtList.j-card-item ')
+        for product_block in products_blocks:
+            if self._check_product(product_block):
+                url = self._get_url(product_block)
+                yield url
+
+    def get_next_page(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        products_blocks = soup.select('.dtList.i-dtList.j-card-item.no-left-part')
+        for product_block in products_blocks:
+            sale_block = product_block.select_one('span.price-sale.active')
+            if not sale_block:
                 return
-    block_next_page = soup.select_one('.pagination-next')
-    if block_next_page:
-        return HOST + block_next_page['href']
+            else:
+                product_discount = int(sale_block.text.replace('-', '').replace('%', ''))
+                if product_discount < self.category.discount:
+                    return
+        block_next_page = soup.select_one('.pagination-next')
+        if block_next_page:
+            return HOST + block_next_page['href']
 
 
-def get_products_url_from_category(category: Category):
-    first_page_url = category.url + '?sort=sale'
-    response = requests.get(first_page_url)
-    products_urls = parse_products_urls(response.text, category)
-    for product_url in products_urls:
-        yield product_url
-    next_page_url = parse_next_page(response.text, category)
-    if next_page_url:
-        products_page_urls = get_products_url_from_category_page(next_page_url, category)
-        for product_page_url in products_page_urls:
-            yield product_page_url
+class GeneratorProductsURLS:
+    def __init__(self, category: Category):
+        self.category = category
+
+    def get(self, url=None):
+        if not url:
+            url = self.category.url + '?sort=sale'
+        else:
+            url = url + '&sort=sale'
+        response = requests.get(url)
+        parser = ParserCategory(response.text, self.category)
+        products_urls = parser.get_urls_products()
+        for product_url in products_urls:
+            yield product_url
+        next_page_url = parser.get_next_page()
+        if next_page_url:
+            products_page_urls = self.get(next_page_url)
+            for product_page_url in products_page_urls:
+                yield product_page_url
 
 
-def get_products_url_from_category_page(url: str, category: Category):
-    url = url + '&sort=sale'
-    response = requests.get(url)
-    products_urls = parse_products_urls(response.text, category)
-    for product_url in products_urls:
-        yield product_url
-    next_page_url = parse_next_page(response.text, category)
-    if next_page_url:
-        products_page_urls = get_products_url_from_category_page(next_page_url, category)
-        for product_page_url in products_page_urls:
-            yield product_page_url
+class ImageParser:
+    IMG_DIRECTORY = 'images'
 
+    def __init__(self, url):
+        self.url = url
+        self.path = os.path.join(self.IMG_DIRECTORY, self.url.split('/')[-1])
 
-def _parse_description(response: str):
-    soup = BeautifulSoup(response, 'lxml')
-    description = soup.select_one('.description-text')
-    if description:
-        return description.select_one('p').text
+    def save(self):
+        if not os.path.exists(self.IMG_DIRECTORY):
+            os.makedirs(self.IMG_DIRECTORY)
+        h = httplib2.Http('.cache')
+        response, content = h.request(self.url)
+        with open(self.path, 'wb') as img_file:
+            img_file.write(content)
 
-
-def _parse_name(response: str):
-    soup = BeautifulSoup(response, 'lxml')
-    name = soup.select_one('span.name')
-    if name:
-        return name.text
-
-
-def _parse_brand(response: str):
-    soup = BeautifulSoup(response, 'lxml')
-    brand = soup.select_one('span.brand')
-    if brand:
-        return brand.text
-
-
-def save_image(url, path):
-    h = httplib2.Http('.cache')
-    response, content = h.request(url)
-    with open(path, 'wb') as img_file:
-        img_file.write(content)
-
-
-def _parse_aviable(response: str):
-    return sum([int(el) for el in re.findall(r'"quantity":(\d+),', response)])
-
-
-def _parse_photo_url(response: str):
-    soup = BeautifulSoup(response, 'lxml')
-    return 'https:' + soup.select_one('img.preview-photo.j-zoom-preview')['src']
-
-
-def parse_product_data(response: str):
-    re_search = re.search(r'\"priceForProduct\":(\{.+?\})', response)
-    if re_search:
-        json_price = json.loads(re_search.group(1))
-        discount = json_price.get('sale')
-        price = json_price.get('priceWithSale')
-        old_price = json_price.get('price')
-        description = _parse_description(response)
-        name = _parse_name(response)
-        brand = _parse_brand(response)
-        aviable = _parse_aviable(response)
-        data = {'discount': discount,
-                'price': price,
-                'description': description,
-                'name': name,
-                'brand': brand,
-                'aviable': aviable,
-                'old_price': old_price}
-        print(data)
-        return data
+    def delete(self):
+        os.remove(self.path)
 
 
 def update_products_in_db():
     print('[INFO] Обновление продуктов в бд')
-    for product in Product.select().where(Product.closed == False):
+    products = DBManager().product.get_opened()
+    for product in products:
         response_product = requests.get(product.url)
-        product_data = parse_product_data(response_product.text)
+        product_data = ParserProduct(response_product.text).get_data()
         if product_data['aviable'] != product.aviable:
-            product.aviable = product_data['aviable']
             if product_data['aviable'] == 0:
                 product.closed = True
-            with open(os.path.join(config.TEMPLATES_DIRECTORY, 'template.html'), 'r',
-                      encoding='utf-8') as template_file:
-                template_text = template_file.read()
-            template = Template(template_text)
             product_data['url'] = product.url
-            text_message = template.render(product_data)
-            tg_message = TelegramMessage.select().where(TelegramMessage.product == product).get()
-            bot.change_post(tg_message.tg_id, text_message)
-            tg_message.text = text_message
-            product.save()
-            tg_message.save()
+            new_text_message = TemplateMessage(product_data).get_text()
+            telegram_message = DBManager().telegram_message.get_with_product(product)
+            bot.change_post(telegram_message.tg_id, new_text_message)
+            telegram_message.text = new_text_message
+            DBManager().product.save(product)
+            DBManager().telegram_message.save(telegram_message)
             time.sleep(DELAY)
 
 
 def update_new_products():
     print('[INFO] Поиск новых продуктов')
-    for category in Category.select():
-        print('[INFO] Категория: {}'.format(category.url))
-        products_urls = get_products_url_from_category(category)
-        for product_url in products_urls:
-            product_in_db = Product.select().where(Product.url == product_url)
-            response_product = requests.get(product_url)
-            product_data = parse_product_data(response_product.text)
-            if product_data['brand'] in EXCEPTION_MARKETS:
+    product_generator_list = []
+    categories = DBManager().category.get_all()
+    for category in categories:
+        products_urls = GeneratorProductsURLS(category).get()
+        product_generator_list.append((category, products_urls))
+    while product_generator_list:
+        for el in product_generator_list:
+            try:
+                product_url = next(el[1])
+            except StopIteration:
+                del el
                 continue
-            if not product_in_db:
-                with open(os.path.join(config.TEMPLATES_DIRECTORY, 'template.html'), 'r', encoding='utf-8') as template_file:
-                    template_text = template_file.read()
-                template = Template(template_text)
-                product_data['url'] = product_url
-                text_message = template.render(product_data)
-                photo_url = _parse_photo_url(response_product.text)
-                photo_path = os.path.join(IMG_DIRECTORY, photo_url.split('/')[-1])
-                save_image(photo_url, photo_path)
-
-                with open(photo_path, 'rb') as image:
-                    message_id = bot.send_post(image, text_message)
-                os.remove(photo_path)
-                product_data['category'] = category
-                product = Product.create(**product_data)
-                TelegramMessage.create(product=product, tg_id=message_id, text=text_message)
-                Photo.create(product=product, url=photo_url, path=photo_path)
-                time.sleep(DELAY)
+            category = el[0]
+            response_product = requests.get(product_url)
+            product_data = ParserProduct(response_product.text).get_data()
+            product_data['url'] = product_url
+            text_message = TemplateMessage(product_data).get_text()
+            photo_url = ParserProduct(response_product.text).get_photo_url()
+            try:
+                message_id = bot.send_post(photo_url, text_message)
+            except ApiTelegramException:
+                continue
+            product_data['category'] = category
+            product = DBManager().product.create(product_data)
+            DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
+            time.sleep(DELAY)
 
 
 def update_products():
@@ -215,4 +259,5 @@ def update_products():
 
 
 if __name__ == '__main__':
-    update_products()
+    while True:
+        update_products()
