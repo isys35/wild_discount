@@ -310,8 +310,8 @@ def update_new_products():
                 print(ApiTelegramException)
                 continue
             product_data['category'] = category
-            product = DBManager().product.create(product_data)
             try:
+                product = DBManager().product.create(product_data)
                 DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
             except IntegrityError:
                 continue
