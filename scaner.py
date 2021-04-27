@@ -7,6 +7,7 @@ import httplib2
 import os
 from jinja2 import Template
 import traceback
+from peewee import IntegrityError
 
 from telebot.apihelper import ApiTelegramException
 
@@ -142,10 +143,20 @@ class ParserCategory:
     def get_urls_products(self):
         soup = BeautifulSoup(self.response_text, 'lxml')
         products_blocks = soup.select('.dtList.i-dtList.j-card-item ')
+        urls = []
         for product_block in products_blocks:
             if self._check_product(product_block):
                 url = self._get_url(product_block)
-                yield url
+                urls.append(url)
+        return urls
+
+    def get_url_product(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        products_blocks = soup.select('.dtList.i-dtList.j-card-item ')
+        for product_block in products_blocks:
+            if self._check_product(product_block):
+                url = self._get_url(product_block)
+                return url
 
     def get_next_page(self):
         soup = BeautifulSoup(self.response_text, 'lxml')
@@ -178,13 +189,41 @@ class GeneratorProductsURLS:
         response = requests.get(url)
         parser = ParserCategory(response.text, self.category)
         products_urls = parser.get_urls_products()
+        next_page_url = parser.get_next_page()
+        response = None
+        parser.response_text = None
         for product_url in products_urls:
             yield product_url
-        next_page_url = parser.get_next_page()
         if next_page_url:
             products_page_urls = self.get(next_page_url)
             for product_page_url in products_page_urls:
                 yield product_page_url
+
+
+class GetterProductURl:
+    def __init__(self, category: Category):
+        self.category = category
+
+    def get(self, url=None):
+        if not url:
+            if 'xsubject' in self.category.url:
+                url = self.category.url + '&sort=sale'
+            else:
+                url = self.category.url + '?sort=sale'
+        else:
+            url = url + '&sort=sale'
+        response = requests.get(url)
+        parser = ParserCategory(response.text, self.category)
+        product_url = parser.get_url_product()
+        if product_url:
+            return product_url
+        next_page_url = parser.get_next_page()
+        if next_page_url:
+            response = None
+            parser.response_text = None
+            product_page_url = self.get(next_page_url)
+            if product_page_url:
+                return product_page_url
 
 
 class ImageParser:
@@ -212,13 +251,33 @@ def update_products_in_db():
     for product in products:
         response_product = requests.get(product.url)
         product_data = ParserProduct(response_product.text).get_data()
+        if not product_data:
+            product.closed = True
+            product_data = product.__dict__
+            product_data['aviable'] = 0
+            new_text_message = TemplateMessage(product_data).get_text()
+            telegram_message = DBManager().telegram_message.get_with_product(product)
+            try:
+                bot.change_post(telegram_message.tg_id, new_text_message)
+            except ApiTelegramException:
+                print(ApiTelegramException)
+                continue
+            telegram_message.text = new_text_message
+            DBManager().product.save(product)
+            DBManager().telegram_message.save(telegram_message)
+            time.sleep(DELAY)
+            continue
         if product_data['aviable'] != product.aviable:
             if product_data['aviable'] == 0:
                 product.closed = True
             product_data['url'] = product.url
             new_text_message = TemplateMessage(product_data).get_text()
             telegram_message = DBManager().telegram_message.get_with_product(product)
-            bot.change_post(telegram_message.tg_id, new_text_message)
+            try:
+                bot.change_post(telegram_message.tg_id, new_text_message)
+            except ApiTelegramException:
+                print(ApiTelegramException)
+                continue
             telegram_message.text = new_text_message
             DBManager().product.save(product)
             DBManager().telegram_message.save(telegram_message)
@@ -252,13 +311,37 @@ def update_new_products():
                 continue
             product_data['category'] = category
             product = DBManager().product.create(product_data)
+            try:
+                DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
+            except IntegrityError:
+                continue
+            time.sleep(DELAY)
+
+
+def update_new_products_without_generator():
+    categories = DBManager().category.get_all()
+    for category in categories:
+        product_url = GetterProductURl(category).get()
+        if product_url:
+            response_product = requests.get(product_url)
+            product_data = ParserProduct(response_product.text).get_data()
+            product_data['url'] = product_url
+            text_message = TemplateMessage(product_data).get_text()
+            photo_url = ParserProduct(response_product.text).get_photo_url()
+            try:
+                message_id = bot.send_post(photo_url, text_message)
+            except ApiTelegramException:
+                print(ApiTelegramException)
+                continue
+            product_data['category'] = category
+            product = DBManager().product.create(product_data)
             DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
             time.sleep(DELAY)
 
 
 def update_products():
-    update_products_in_db()
     update_new_products()
+    update_products_in_db()
 
 
 if __name__ == '__main__':
@@ -267,4 +350,4 @@ if __name__ == '__main__':
             update_products()
         except Exception:
             print(traceback.format_exc())
-            time.sleep(DELAY)
+            break
