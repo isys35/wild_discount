@@ -7,5 +7,5 @@ if __name__ == '__main__':
             scaner.update_products()
         except Exception as ex:
             print('[ERROR]')
-            print(traceback.format_exc())
+            print(ex)
             input('Press enter...')

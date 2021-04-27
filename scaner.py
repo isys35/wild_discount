@@ -256,10 +256,3 @@ def update_products():
     update_products_in_db()
     update_new_products()
 
-
-if __name__ == '__main__':
-    while True:
-        try:
-            update_products()
-        except Exception:
-            print(traceback.format_exc())
