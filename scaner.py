@@ -262,4 +262,9 @@ def update_products():
 
 
 if __name__ == '__main__':
-    update_products()
+    while True:
+        try:
+            update_products()
+        except Exception:
+            print(traceback.format_exc())
+            time.sleep(DELAY)
