@@ -301,6 +301,8 @@ def update_new_products():
             category = el[0]
             response_product = requests.get(product_url)
             product_data = ParserProduct(response_product.text).get_data()
+            if not product_data:
+                continue
             product_data['url'] = product_url
             text_message = TemplateMessage(product_data).get_text()
             photo_url = ParserProduct(response_product.text).get_photo_url()
