@@ -54,7 +54,7 @@ class DBMain:
         instance.save()
 
     def get_all(self):
-        return self.model.select()
+        return self.model.select().order_by(self.model.id.desc())
 
     def create(self, data):
         return self.model.create(**data)

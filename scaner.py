@@ -6,6 +6,7 @@ import time
 import httplib2
 import os
 from jinja2 import Template
+import traceback
 
 from telebot.apihelper import ApiTelegramException
 
@@ -258,4 +259,7 @@ def update_products():
 
 if __name__ == '__main__':
     while True:
-        update_products()
+        try:
+            update_products()
+        except Exception:
+            print(traceback.format_exc())
