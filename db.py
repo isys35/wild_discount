@@ -1,5 +1,6 @@
 from peewee import *
 import os
+import openpyxl
 
 DEFAULT_DISCOUNT = 80
 DB_PATH = 'data.db'
@@ -9,6 +10,7 @@ db = SqliteDatabase(DB_PATH)
 class BaseModel(Model):
     class Meta:
         database = db
+        order_by = ('-id',)
 
 
 class Category(BaseModel):
@@ -84,6 +86,16 @@ class DBCategory(DBMain):
         super().__init__()
         self.model = Category
 
+    def get_by_url(self, url):
+        return self.model.select().where(self.model.url == url)
+
+    def update(self, data):
+        category = self.model.get(self.model.url == data['url'])
+        category.discount = data['discount']
+        category.price_border = data['price_border']
+        category.price_border_with_discount = data['price_border_with_discount']
+        category.save()
+
 
 def init():
     BaseModel.create_table()
@@ -92,26 +104,25 @@ def init():
     TelegramMessage.create_table()
 
 
-def hand_update_categories():
-    while True:
-        url = input('Введите ссылку на категорию: ')
-        discount = input('Введите скидку(80 по умолчанию):')
-        if not discount:
-            try:
-                Category.create(url=url)
-                print('[INFO] Категория сохранена')
-            except IntegrityError:
+def updater_from_excel():
+    wb = openpyxl.load_workbook('женщины_с_сылками.xlsx')
+    ws = wb.active
+    for row in ws:
+        if row[0].value:
+            url = row[0].value.replace('sort=popular&', '')
+            print(url)
+            category_in_db = DBManager().category.get_by_url(url)
+            data = {'url': url, 'discount': int(row[3].value),
+                    'price_border': int(row[1].value),
+                    'price_border_with_discount': int(row[2].value)}
+            if category_in_db:
+                DBManager().category.update(data)
                 continue
-        else:
-            try:
-                Category.create(url=url, discount=int(discount))
-                print('[INFO] Категория сохранена')
-            except IntegrityError:
-                continue
+            DBManager().category.create(data)
 
 
 if not os.path.isfile(DB_PATH):
     init()
 
 if __name__ == '__main__':
-    init()
+    updater_from_excel()
