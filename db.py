@@ -1,6 +1,5 @@
 from peewee import *
 import os
-import openpyxl
 
 DEFAULT_DISCOUNT = 80
 DB_PATH = 'data.db'
@@ -104,25 +103,5 @@ def init():
     TelegramMessage.create_table()
 
 
-def updater_from_excel():
-    wb = openpyxl.load_workbook('женщины_с_сылками.xlsx')
-    ws = wb.active
-    for row in ws:
-        if row[0].value:
-            url = row[0].value.replace('sort=popular&', '')
-            print(url)
-            category_in_db = DBManager().category.get_by_url(url)
-            data = {'url': url, 'discount': int(row[3].value),
-                    'price_border': int(row[1].value),
-                    'price_border_with_discount': int(row[2].value)}
-            if category_in_db:
-                DBManager().category.update(data)
-                continue
-            DBManager().category.create(data)
-
-
 if not os.path.isfile(DB_PATH):
     init()
-
-if __name__ == '__main__':
-    updater_from_excel()

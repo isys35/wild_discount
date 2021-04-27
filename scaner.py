@@ -169,7 +169,10 @@ class GeneratorProductsURLS:
 
     def get(self, url=None):
         if not url:
-            url = self.category.url + '?sort=sale'
+            if 'xsubject' in self.category.url:
+                url = self.category.url + '&sort=sale'
+            else:
+                url = self.category.url + '?sort=sale'
         else:
             url = url + '&sort=sale'
         response = requests.get(url)
@@ -245,6 +248,7 @@ def update_new_products():
             try:
                 message_id = bot.send_post(photo_url, text_message)
             except ApiTelegramException:
+                print(ApiTelegramException)
                 continue
             product_data['category'] = category
             product = DBManager().product.create(product_data)
@@ -258,8 +262,4 @@ def update_products():
 
 
 if __name__ == '__main__':
-    while True:
-        try:
-            update_products()
-        except Exception as ex:
-            print(ex)
+    update_products()
