@@ -352,4 +352,5 @@ if __name__ == '__main__':
             update_products()
         except Exception:
             print(traceback.format_exc())
-            break
+            time.sleep(DELAY)
+            continue
