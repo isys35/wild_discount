@@ -1,6 +1,5 @@
 import requests
 from bs4 import BeautifulSoup
-import re
 import json
 import time
 import httplib2
@@ -10,6 +9,7 @@ import traceback
 from peewee import IntegrityError
 
 from telebot.apihelper import ApiTelegramException
+import re
 
 from db import Category, DBManager
 import bot
@@ -187,6 +187,11 @@ class GeneratorProductsURLS:
                 url = self.category.url + '?sort=sale'
         else:
             url = url + '&sort=sale'
+        re_search_page = re.search(r'page=(\d+)', url)
+        if re_search_page:
+            page = int(re_search_page.group(1))
+            if self.depth and page > self.depth:
+                return
         response = requests.get(url)
         parser = ParserCategory(response.text, self.category)
         products_urls = parser.get_urls_products()
@@ -285,15 +290,9 @@ def update_products_in_db():
             time.sleep(DELAY)
 
 
-def update_new_products():
-    print('[INFO] Поиск новых продуктов')
-    product_generator_list = []
-    categories = DBManager().category.get_all()
-    for category in categories:
-        products_urls = GeneratorProductsURLS(category).get()
-        product_generator_list.append((category, products_urls))
-    while product_generator_list:
-        for el in product_generator_list:
+def update_from_generators(generators: list):
+    while generators:
+        for el in generators:
             try:
                 product_url = next(el[1])
             except StopIteration:
@@ -315,13 +314,22 @@ def update_new_products():
             try:
                 message_id = bot.send_post(photo_url, text_message)
             except ApiTelegramException:
-                print(ApiTelegramException)
                 continue
             try:
                 DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
             except IntegrityError:
                 continue
             time.sleep(DELAY)
+
+
+def update_new_products():
+    print('[INFO] Поиск новых продуктов')
+    product_generator_list = []
+    categories = DBManager().category.get_all()
+    for category in categories:
+        products_urls = GeneratorProductsURLS(category).get()
+        product_generator_list.append((category, products_urls))
+    update_from_generators(product_generator_list)
 
 
 def update_new_products_without_generator():
@@ -345,8 +353,19 @@ def update_new_products_without_generator():
             time.sleep(DELAY)
 
 
+def update_new_products_with_depth_limit():
+    product_generator_list = []
+    categories = DBManager().category.get_all()
+    for category in categories:
+        products_urls_generator = GeneratorProductsURLS(category)
+        products_urls_generator.depth = 10
+        products_urls = products_urls_generator.get()
+        product_generator_list.append((category, products_urls))
+    update_from_generators(product_generator_list)
+
+
 def update_products():
-    update_new_products()
+    update_new_products_with_depth_limit()
     update_products_in_db()
 
 
