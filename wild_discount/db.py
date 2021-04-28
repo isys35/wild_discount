@@ -1,8 +1,9 @@
 from peewee import *
 import os
+from .config import BASE_DIR
 
 DEFAULT_DISCOUNT = 80
-DB_PATH = 'data.db'
+DB_PATH = os.path.join(BASE_DIR, 'data.db')
 db = SqliteDatabase(DB_PATH)
 
 

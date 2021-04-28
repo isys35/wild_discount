@@ -7,6 +7,8 @@ from jinja2 import Template
 import traceback
 from peewee import IntegrityError
 
+from .config import BASE_DIR
+
 from telebot.apihelper import ApiTelegramException
 import re
 
@@ -25,21 +27,20 @@ MAIN_HEADERS = {
     'TE': 'Trailers'
 }
 
-
 HOST = 'https://www.wildberries.ru'
 DELAY = 3
 
 
 class TemplateMessage:
-    TEMPLATE_FILE = 'template.html'
+    TEMPLATE_FILE = 'message.html'
     TEMPLATE_DIR = 'templates'
+    TEMPLATE_PATH = os.path.join(BASE_DIR, TEMPLATE_DIR, TEMPLATE_FILE)
 
     def __init__(self, data: dict):
         self.data = data
 
     def get_text(self):
-        template_path = os.path.join(self.TEMPLATE_DIR, self.TEMPLATE_FILE)
-        with open(template_path, 'r', encoding='utf-8') as template_file:
+        with open(self.TEMPLATE_PATH, 'r', encoding='utf-8') as template_file:
             template_text = template_file.read()
         template = Template(template_text)
         text_message = template.render(self.data)
@@ -47,8 +48,8 @@ class TemplateMessage:
 
 
 class ParserProduct:
-    def __init__(self, response_text: str):
-        self.response_text = response_text
+    def __init__(self):
+        self.response_text = None
 
     def _get_description(self):
         soup = BeautifulSoup(self.response_text, 'lxml')
@@ -71,11 +72,14 @@ class ParserProduct:
     def _get_aviable(self):
         return sum([int(el) for el in re.findall(r'"quantity":(\d+),', self.response_text)])
 
-    def get_photo_url(self):
+    def get_photo_url(self, response_text):
+        self.response_text = response_text
         soup = BeautifulSoup(self.response_text, 'lxml')
-        return 'https:' + soup.select_one('img.preview-photo.j-zoom-preview')['src']
+        photo_url = 'https:' + soup.select_one('img.preview-photo.j-zoom-preview')['src']
+        return photo_url
 
-    def get_data(self):
+    def get_data(self, response_text):
+        self.response_text = response_text
         re_search = re.search(r'\"priceForProduct\":(\{.+?\})', self.response_text)
         if re_search:
             json_price = json.loads(re_search.group(1))
@@ -92,69 +96,106 @@ class ParserProduct:
                     'aviable': aviable,
                     'old_price': old_price}
             print(data)
+            self.response_text = None
             return data
+        self.response_text = None
+
+
+class ProductFilter:
+    EXCEPTION_MARKETS = ['Шепелев']
+
+    def __init__(self, product_block: BeautifulSoup, discount: int,
+                 price_border_with_discount: int, price_border: int):
+        self.product_block = product_block
+        self.discount = discount
+        self.price_border_with_discount = price_border_with_discount
+        self.price_border = price_border
+
+    def get_url(self):
+        url = HOST + self.product_block.select_one('.ref_goods_n_p.j-open-full-product-card')['href']
+        return url
+
+    def _is_product_in_db(self):
+        url = self.get_url()
+        product_from_db = DBManager().product.get_by_url(url)
+        if product_from_db:
+            return True
+
+    def _is_product_has_sale_block(self):
+        sale_block = self.product_block.select_one('span.price-sale.active')
+        if sale_block:
+            return True
+
+    def _is_product_brand_in_exceptions(self):
+        brand = self.product_block.select_one('.brand-name.c-text-sm').text.replace('/', '').strip()
+        if brand in self.EXCEPTION_MARKETS:
+            return True
+
+    def _is_product_discount_match(self):
+        sale_block = self.product_block.select_one('span.price-sale.active')
+        product_discount = int(sale_block.text.replace('-', '').replace('%', ''))
+        if product_discount >= self.discount:
+            return True
+
+    def _is_product_price_in_border_price(self):
+        sale_block = self.product_block.select_one('span.price-sale.active')
+        product_discount = int(sale_block.text.replace('-', '').replace('%', ''))
+        product_old_price = int(
+            ''.join(re.findall(r'\d', self.product_block.select_one('span.price-old-block').select_one('del').text)))
+        product_new_price = int(''.join(re.findall(r'\d', self.product_block.select_one('ins.lower-price').text)))
+        filter_price = product_discount >= self.discount and \
+                       product_old_price < self.price_border and \
+                       product_new_price < self.price_border_with_discount
+        if filter_price:
+            return True
+
+    def check(self):
+        if self._is_product_in_db():
+            return
+        if not self._is_product_has_sale_block():
+            return
+        if self._is_product_brand_in_exceptions():
+            return
+        if not self.price_border and not self.price_border_with_discount:
+            if self._is_product_discount_match():
+                return True
+        else:
+            if self._is_product_price_in_border_price():
+                return True
 
 
 class ParserCategory:
-    EXCEPTION_MARKET_FILE = 'exceptions_markets.txt'
+    # EXCEPTION_MARKET_FILE = 'exceptions_markets.txt'
+    # EXCEPTION_MARKET_FILE_PATH = os.path.join(BASE_DIR, EXCEPTION_MARKET_FILE)
+    # with open(EXCEPTION_MARKET_FILE_PATH, 'r') as exc_market_file:
+    #     EXCEPTION_MARKETS = exc_market_file.read().split('\n')
 
-    with open(EXCEPTION_MARKET_FILE, 'r') as exc_market_file:
-        EXCEPTION_MARKETS = exc_market_file.read().split('\n')
-
-    def __init__(self, response_text: str, category: Category):
-        self.response_text = response_text
+    def __init__(self, category: Category):
+        self.response_text = None
         self.category = category
 
     @staticmethod
-    def _get_url(product_block):
-        url = HOST + product_block.select_one('.ref_goods_n_p.j-open-full-product-card')['href']
-        return url
-
-    def _check_product(self, product_block):
-        url = self._get_url(product_block)
-        product_from_db = DBManager().product.get_by_url(url)
-        if product_from_db:
-            return
-        sale_block = product_block.select_one('span.price-sale.active')
-        if not sale_block:
-            return
-        brand = product_block.select_one('.brand-name.c-text-sm').text.replace('/', '').strip()
-        if brand in self.EXCEPTION_MARKETS:
-            return
-        product_discount = int(sale_block.text.replace('-', '').replace('%', ''))
-        if not self.category.price_border and not self.category.price_border_with_discount:
-            if product_discount >= self.category.discount:
-                return True
-        else:
-            product_old_price = int(
-                ''.join(re.findall(r'\d', product_block.select_one('span.price-old-block').select_one('del').text)))
-            product_new_price = int(''.join(re.findall(r'\d', product_block.select_one('ins.lower-price').text)))
-            filter_price = product_discount >= self.category.discount and \
-                           product_old_price < self.category.price_border and \
-                           product_new_price < self.category.price_border_with_discount
-            if filter_price:
-                return True
-
-    def get_urls_products(self):
-        soup = BeautifulSoup(self.response_text, 'lxml')
+    def get_products_blocks(response_text):
+        soup = BeautifulSoup(response_text, 'lxml')
         products_blocks = soup.select('.dtList.i-dtList.j-card-item ')
+        return products_blocks
+
+    def get_urls_products(self, response_text):
+        self.response_text = response_text
+        products_blocks = self.get_products_blocks(response_text)
         urls = []
         for product_block in products_blocks:
-            if self._check_product(product_block):
-                url = self._get_url(product_block)
+            product_filter = ProductFilter(product_block, discount=self.category.discount,
+                                           price_border=self.category.price_border,
+                                           price_border_with_discount=self.category.price_border_with_discount)
+            if product_filter.check():
+                url = product_filter.get_url()
                 urls.append(url)
+        self.response_text = None
         return urls
 
-    def get_url_product(self):
-        soup = BeautifulSoup(self.response_text, 'lxml')
-        products_blocks = soup.select('.dtList.i-dtList.j-card-item ')
-        for product_block in products_blocks:
-            if self._check_product(product_block):
-                url = self._get_url(product_block)
-                return url
-
-    def get_next_page(self):
-        soup = BeautifulSoup(self.response_text, 'lxml')
+    def get_next_page(self, response_text):
+        soup = BeautifulSoup(response_text, 'lxml')
         products_blocks = soup.select('.dtList.i-dtList.j-card-item.no-left-part')
         for product_block in products_blocks:
             sale_block = product_block.select_one('span.price-sale.active')
@@ -188,11 +229,10 @@ class GeneratorProductsURLS:
             if self.depth and page > self.depth:
                 return
         response = requests.get(url)
-        parser = ParserCategory(response.text, self.category)
-        products_urls = parser.get_urls_products()
-        next_page_url = parser.get_next_page()
+        parser = ParserCategory(self.category)
+        products_urls = parser.get_urls_products(response.text)
+        next_page_url = parser.get_next_page(response.text)
         response = None
-        parser.response_text = None
         for product_url in products_urls:
             yield product_url
         if next_page_url:
@@ -201,38 +241,13 @@ class GeneratorProductsURLS:
                 yield product_page_url
 
 
-class GetterProductURl:
-    def __init__(self, category: Category):
-        self.category = category
-
-    def get(self, url=None):
-        if not url:
-            if 'xsubject' in self.category.url:
-                url = self.category.url + '&sort=sale'
-            else:
-                url = self.category.url + '?sort=sale'
-        else:
-            url = url + '&sort=sale'
-        response = requests.get(url)
-        parser = ParserCategory(response.text, self.category)
-        product_url = parser.get_url_product()
-        if product_url:
-            return product_url
-        next_page_url = parser.get_next_page()
-        if next_page_url:
-            response = None
-            parser.response_text = None
-            product_page_url = self.get(next_page_url)
-            if product_page_url:
-                return product_page_url
-
 
 def update_products_in_db():
     print('[INFO] Обновление продуктов в бд')
     products = DBManager().product.get_opened()
     for product in products:
         response_product = requests.get(product.url)
-        product_data = ParserProduct(response_product.text).get_data()
+        product_data = ParserProduct().get_data(response_product.text)
         if not product_data:
             product.closed = True
             product_data = product.__dict__
@@ -276,12 +291,12 @@ def update_from_generators(generators: list):
                 continue
             category = el[0]
             response_product = requests.get(product_url)
-            product_data = ParserProduct(response_product.text).get_data()
+            product_data = ParserProduct().get_data(response_product.text)
             if not product_data:
                 continue
             product_data['url'] = product_url
             text_message = TemplateMessage(product_data).get_text()
-            photo_url = ParserProduct(response_product.text).get_photo_url()
+            photo_url = ParserProduct().get_photo_url(response_product.text)
             product_data['category'] = category
             try:
                 product = DBManager().product.create(product_data)
@@ -306,27 +321,6 @@ def update_new_products():
         products_urls = GeneratorProductsURLS(category).get()
         product_generator_list.append((category, products_urls))
     update_from_generators(product_generator_list)
-
-
-def update_new_products_without_generator():
-    categories = DBManager().category.get_all()
-    for category in categories:
-        product_url = GetterProductURl(category).get()
-        if product_url:
-            response_product = requests.get(product_url)
-            product_data = ParserProduct(response_product.text).get_data()
-            product_data['url'] = product_url
-            text_message = TemplateMessage(product_data).get_text()
-            photo_url = ParserProduct(response_product.text).get_photo_url()
-            try:
-                message_id = bot.send_post(photo_url, text_message)
-            except ApiTelegramException:
-                print(ApiTelegramException)
-                continue
-            product_data['category'] = category
-            product = DBManager().product.create(product_data)
-            DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
-            time.sleep(DELAY)
 
 
 def update_new_products_with_depth_limit():
