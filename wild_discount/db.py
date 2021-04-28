@@ -23,12 +23,12 @@ class Category(BaseModel):
 class Product(BaseModel):
     url = CharField(unique=True)
     category = ForeignKeyField(Category, backref='products')
-    brand = CharField()
-    name = CharField()
-    discount = IntegerField()
-    price = FloatField()
-    old_price = FloatField()
-    aviable = IntegerField()
+    brand = CharField(null=True)
+    name = CharField(null=True)
+    discount = IntegerField(null=True)
+    price = FloatField(null=True)
+    old_price = FloatField(null=True)
+    aviable = IntegerField(null=True)
     closed = BooleanField(default=False)
 
 
@@ -78,7 +78,9 @@ class DBTelegram(DBMain):
         self.model = TelegramMessage
 
     def get_with_product(self, product: Product):
-        return self.model.select().where(self.model.product == product).get()
+        message = self.model.select().where(self.model.product == product)
+        if message:
+            return message.get()
 
 
 class DBCategory(DBMain):

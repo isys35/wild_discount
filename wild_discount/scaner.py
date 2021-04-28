@@ -4,8 +4,6 @@ import json
 import time
 import os
 from jinja2 import Template
-import traceback
-from peewee import IntegrityError
 
 from .config import BASE_DIR
 
@@ -72,6 +70,16 @@ class ParserProduct:
     def _get_aviable(self):
         return sum([int(el) for el in re.findall(r'"quantity":(\d+),', self.response_text)])
 
+    def _get_other_colors(self):
+        soup = BeautifulSoup(self.response_text, 'lxml')
+        urls = []
+        all_color = soup.select('.swiper-slide.color.j-color')
+        if all_color:
+            for el in all_color[1:]:
+                url = 'https://www.wildberries.ru' + el.select_one('a')['href'].replace('?targetUrl=EX', '')
+                urls.append(url)
+        return urls
+
     def get_photo_url(self, response_text):
         self.response_text = response_text
         soup = BeautifulSoup(self.response_text, 'lxml')
@@ -89,12 +97,14 @@ class ParserProduct:
             name = self._get_name()
             brand = self._get_brand()
             aviable = self._get_aviable()
+            other_colors = self._get_other_colors()
             data = {'discount': discount,
                     'price': price,
                     'name': name,
                     'brand': brand,
                     'aviable': aviable,
-                    'old_price': old_price}
+                    'old_price': old_price,
+                    'other_colors': other_colors}
             print(data)
             self.response_text = None
             return data
@@ -165,10 +175,6 @@ class ProductFilter:
 
 
 class ParserCategory:
-    # EXCEPTION_MARKET_FILE = 'exceptions_markets.txt'
-    # EXCEPTION_MARKET_FILE_PATH = os.path.join(BASE_DIR, EXCEPTION_MARKET_FILE)
-    # with open(EXCEPTION_MARKET_FILE_PATH, 'r') as exc_market_file:
-    #     EXCEPTION_MARKETS = exc_market_file.read().split('\n')
 
     def __init__(self, category: Category):
         self.response_text = None
@@ -215,7 +221,7 @@ class GeneratorProductsURLS:
         self.category = category
         self.depth = None
 
-    def get(self, url=None):
+    def _update_url(self, url):
         if not url:
             if 'xsubject' in self.category.url:
                 url = self.category.url + '&sort=sale'
@@ -223,11 +229,20 @@ class GeneratorProductsURLS:
                 url = self.category.url + '?sort=sale'
         else:
             url = url + '&sort=sale'
+        return url
+
+    @staticmethod
+    def _get_page_from_url(url):
         re_search_page = re.search(r'page=(\d+)', url)
         if re_search_page:
             page = int(re_search_page.group(1))
-            if self.depth and page > self.depth:
-                return
+            return page
+
+    def get(self, url=None):
+        url = self._update_url(url)
+        page = self._get_page_from_url(url)
+        if self.depth and page and page > self.depth:
+            return
         response = requests.get(url)
         parser = ParserCategory(self.category)
         products_urls = parser.get_urls_products(response.text)
@@ -241,35 +256,24 @@ class GeneratorProductsURLS:
                 yield product_page_url
 
 
-
 def update_products_in_db():
     print('[INFO] Обновление продуктов в бд')
     products = DBManager().product.get_opened()
     for product in products:
         response_product = requests.get(product.url)
+        telegram_message = DBManager().telegram_message.get_with_product(product)
+        if not telegram_message:
+            continue
         product_data = ParserProduct().get_data(response_product.text)
         if not product_data:
-            product.closed = True
-            product_data = product.__dict__
-            product_data['aviable'] = 0
-            new_text_message = TemplateMessage(product_data).get_text()
-            telegram_message = DBManager().telegram_message.get_with_product(product)
-            try:
-                bot.change_post(telegram_message.tg_id, new_text_message)
-            except ApiTelegramException:
-                print(ApiTelegramException)
-                continue
-            telegram_message.text = new_text_message
-            DBManager().product.save(product)
-            DBManager().telegram_message.save(telegram_message)
-            time.sleep(DELAY)
             continue
         if product_data['aviable'] != product.aviable:
+            if product_data['price'] == 0:
+                product_data['aviable'] = 0
             if product_data['aviable'] == 0:
                 product.closed = True
             product_data['url'] = product.url
             new_text_message = TemplateMessage(product_data).get_text()
-            telegram_message = DBManager().telegram_message.get_with_product(product)
             try:
                 bot.change_post(telegram_message.tg_id, new_text_message)
             except ApiTelegramException:
@@ -290,26 +294,26 @@ def update_from_generators(generators: list):
                 del el
                 continue
             category = el[0]
+            product_in_db = DBManager().product.get_by_url(product_url)
+            if product_in_db:
+                continue
             response_product = requests.get(product_url)
             product_data = ParserProduct().get_data(response_product.text)
             if not product_data:
                 continue
+            if product_data['other_colors']:
+                for other_color_url in product_data['other_colors']:
+                    DBManager().product.create({'url': other_color_url, 'category':category})
             product_data['url'] = product_url
             text_message = TemplateMessage(product_data).get_text()
             photo_url = ParserProduct().get_photo_url(response_product.text)
             product_data['category'] = category
-            try:
-                product = DBManager().product.create(product_data)
-            except IntegrityError:
-                continue
+            product = DBManager().product.create(product_data)
             try:
                 message_id = bot.send_post(photo_url, text_message)
             except ApiTelegramException:
                 continue
-            try:
-                DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
-            except IntegrityError:
-                continue
+            DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
             time.sleep(DELAY)
 
 
@@ -335,15 +339,5 @@ def update_new_products_with_depth_limit():
 
 
 def update_products():
-    update_new_products_with_depth_limit()
     update_products_in_db()
-
-
-if __name__ == '__main__':
-    while True:
-        try:
-            update_products()
-        except Exception:
-            print(traceback.format_exc())
-            time.sleep(DELAY)
-            continue
+    update_new_products_with_depth_limit()
