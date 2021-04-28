@@ -177,6 +177,7 @@ class ParserCategory:
 class GeneratorProductsURLS:
     def __init__(self, category: Category):
         self.category = category
+        self.depth = None
 
     def get(self, url=None):
         if not url:
@@ -306,14 +307,17 @@ def update_new_products():
             product_data['url'] = product_url
             text_message = TemplateMessage(product_data).get_text()
             photo_url = ParserProduct(response_product.text).get_photo_url()
+            product_data['category'] = category
+            try:
+                product = DBManager().product.create(product_data)
+            except IntegrityError:
+                continue
             try:
                 message_id = bot.send_post(photo_url, text_message)
             except ApiTelegramException:
                 print(ApiTelegramException)
                 continue
-            product_data['category'] = category
             try:
-                product = DBManager().product.create(product_data)
                 DBManager().telegram_message.create({'product': product, 'tg_id': message_id, 'text': text_message})
             except IntegrityError:
                 continue
