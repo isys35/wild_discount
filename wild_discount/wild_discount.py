@@ -1,5 +1,4 @@
-import traceback
-import scaner
+from wild_discount import scaner
 
 if __name__ == '__main__':
     while True:

@@ -1,6 +1,6 @@
 import telebot
-import config
-from scaner import ImageParser
+from wild_discount import config
+from wild_discount.image_parser import ImageParser
 
 bot = telebot.TeleBot(config.BOT_TOKEN)
 

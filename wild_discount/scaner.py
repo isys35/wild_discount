@@ -2,7 +2,6 @@ import requests
 from bs4 import BeautifulSoup
 import json
 import time
-import httplib2
 import os
 from jinja2 import Template
 import traceback
@@ -11,8 +10,8 @@ from peewee import IntegrityError
 from telebot.apihelper import ApiTelegramException
 import re
 
-from db import Category, DBManager
-import bot
+from wild_discount.db import Category, DBManager
+from wild_discount import bot
 
 MAIN_HEADERS = {
     'Host': 'www.wildberries.ru',
@@ -25,22 +24,17 @@ MAIN_HEADERS = {
     'Referer': 'https://www.wildberries.ru/',
     'TE': 'Trailers'
 }
-URL_CATEGORIES = 'https://www.wildberries.ru/menu/getrendered?lang=ru&burger=true'
+
 
 HOST = 'https://www.wildberries.ru'
 DELAY = 3
-
-
-def save_page(response: str, file_name='page.html'):
-    with open(file_name, 'w', encoding='utf8') as html_file:
-        html_file.write(response)
 
 
 class TemplateMessage:
     TEMPLATE_FILE = 'template.html'
     TEMPLATE_DIR = 'templates'
 
-    def __init__(self, data):
+    def __init__(self, data: dict):
         self.data = data
 
     def get_text(self):
@@ -103,6 +97,7 @@ class ParserProduct:
 
 class ParserCategory:
     EXCEPTION_MARKET_FILE = 'exceptions_markets.txt'
+
     with open(EXCEPTION_MARKET_FILE, 'r') as exc_market_file:
         EXCEPTION_MARKETS = exc_market_file.read().split('\n')
 
@@ -230,25 +225,6 @@ class GetterProductURl:
             product_page_url = self.get(next_page_url)
             if product_page_url:
                 return product_page_url
-
-
-class ImageParser:
-    IMG_DIRECTORY = 'images'
-
-    def __init__(self, url):
-        self.url = url
-        self.path = os.path.join(self.IMG_DIRECTORY, self.url.split('/')[-1])
-
-    def save(self):
-        if not os.path.exists(self.IMG_DIRECTORY):
-            os.makedirs(self.IMG_DIRECTORY)
-        h = httplib2.Http('.cache')
-        response, content = h.request(self.url)
-        with open(self.path, 'wb') as img_file:
-            img_file.write(content)
-
-    def delete(self):
-        os.remove(self.path)
 
 
 def update_products_in_db():
