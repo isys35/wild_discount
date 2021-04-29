@@ -339,5 +339,5 @@ def update_new_products_with_depth_limit():
 
 
 def update_products():
-    update_products_in_db()
     update_new_products_with_depth_limit()
+    update_products_in_db()
