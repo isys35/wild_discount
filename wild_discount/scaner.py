@@ -303,6 +303,9 @@ def update_from_generators(generators: list):
                 continue
             if product_data['other_colors']:
                 for other_color_url in product_data['other_colors']:
+                    product_in_db = DBManager().product.get_by_url(other_color_url)
+                    if product_in_db:
+                        continue
                     if other_color_url != product_url:
                         DBManager().product.create({'url': other_color_url, 'category':category})
             product_data['url'] = product_url
