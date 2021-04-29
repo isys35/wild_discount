@@ -303,7 +303,8 @@ def update_from_generators(generators: list):
                 continue
             if product_data['other_colors']:
                 for other_color_url in product_data['other_colors']:
-                    DBManager().product.create({'url': other_color_url, 'category':category})
+                    if other_color_url != product_url:
+                        DBManager().product.create({'url': other_color_url, 'category':category})
             product_data['url'] = product_url
             text_message = TemplateMessage(product_data).get_text()
             photo_url = ParserProduct().get_photo_url(response_product.text)
