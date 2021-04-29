@@ -8,7 +8,7 @@ if __name__ == '__main__':
             scaner.update_products()
         except Exception:
             print(traceback.format_exc())
-            time.sleep(3)
+            input("Нажмите Enter....")
             continue
 
 
