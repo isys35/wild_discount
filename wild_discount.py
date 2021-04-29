@@ -6,6 +6,8 @@ if __name__ == '__main__':
     while True:
         try:
             scaner.update_products()
+        except ConnectionResetError:
+            continue
         except Exception:
             print(traceback.format_exc())
             input("Нажмите Enter....")
