@@ -69,7 +69,9 @@ class DBProduct(DBMain):
         return self.model.select().where(self.model.closed == False)
 
     def get_by_url(self, url):
-        return self.model.select().where(self.model.url == url)
+        product = self.model.select().where(self.model.url == url)
+        if product.exists():
+            return product.get()
 
 
 class DBTelegram(DBMain):
@@ -79,7 +81,7 @@ class DBTelegram(DBMain):
 
     def get_with_product(self, product: Product):
         message = self.model.select().where(self.model.product == product)
-        if message:
+        if message.exists():
             return message.get()
 
 
