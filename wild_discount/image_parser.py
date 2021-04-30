@@ -1,5 +1,6 @@
 import os
 import httplib2
+import requests
 
 
 class ImageParser:
@@ -12,10 +13,9 @@ class ImageParser:
     def save(self):
         if not os.path.exists(self.IMG_DIRECTORY):
             os.makedirs(self.IMG_DIRECTORY)
-        h = httplib2.Http('.cache')
-        response, content = h.request(self.url)
+        response = requests.get(self.url)
         with open(self.path, 'wb') as img_file:
-            img_file.write(content)
+            img_file.write(response.content)
 
     def delete(self):
         os.remove(self.path)
